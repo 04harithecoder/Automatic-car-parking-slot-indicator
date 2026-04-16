@@ -136,12 +136,6 @@ python parking_main.py
 
 ---
 
-## 🖥️ Screenshots
-
-> *(Add screenshots of your GUI and DOSBox running side by side here)*
-
----
-
 ## 🔮 Future Enhancements
 
 - IoT sensors (IR / Ultrasonic) for automatic vehicle detection
@@ -156,7 +150,8 @@ python parking_main.py
 ## 👨‍💻 Author
 
 **Hariharan Vijayan**  
-B.Sc Computer Science  
+M.Sc., Software Systems(5 Years Integrated course)
+CIT,Coimbatore
 GitHub: [@04harithecoder](https://github.com/04harithecoder)
 
 ---
