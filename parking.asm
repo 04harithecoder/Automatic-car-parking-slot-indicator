@@ -1,0 +1,368 @@
+; ============================================================
+;   AUTOMATIC CAR PARKING SLOT INDICATOR — v4.0
+;   Syntax  : FASM  |  Target: DOS COM (DOSBox)
+;
+;   COMPILE : fasm parking.asm parking.com
+;   RUN     : mount c "C:\Users\HP\Music\MCMP PROJECT"
+;             c:
+;             parking
+;
+;   NEW DESIGN (no menu!):
+;     - Python GUI handles ALL logic (Entry/Exit/MySQL)
+;     - Python writes park.txt with:
+;         AVAILABLE=N
+;         STATUS=OPEN|FULL
+;         CMD=ENTRY|EXIT|QUIT|NONE
+;     - This ASM polls park.txt every ~500ms
+;     - Reads CMD field, prints appropriate message, done!
+;
+;   park.txt layout Python must write:
+;     AVAILABLE= 9\r\n   (14 bytes)
+;     STATUS=OPEN\r\n    (13 bytes)
+;     CMD=ENTRY\r\n      (11 bytes)  ? new!
+; ============================================================
+
+org 100h
+
+; ------------------------------------------------------------
+start:
+    mov  dx, msg_welcome
+    call pstr
+
+main_loop:
+    ; -- Small delay loop (~500ms at 3000 cycles) ------------
+    mov  cx, 0FFFFh
+delay_loop:
+    loop delay_loop
+
+    ; -- Open park.txt for reading ---------------------------
+    mov  ax, 3D00h          ; open file, read-only
+    mov  dx, fname_in
+    int  21h
+    jc   main_loop          ; file not found yet — keep waiting
+
+    mov  [file_handle], ax
+
+    ; -- Read up to 64 bytes into rbuf -----------------------
+    mov  bx, [file_handle]
+    mov  ah, 3Fh
+    mov  cx, 64
+    mov  dx, rbuf
+    int  21h
+
+    ; -- Close file ------------------------------------------
+    mov  bx, [file_handle]
+    mov  ah, 3Eh
+    int  21h
+
+    ; -- Parse CMD= field ------------------------------------
+    ; Find "CMD=" in rbuf, read next 4 chars
+    mov  si, rbuf
+find_cmd:
+    cmp  byte [si], 0
+    je   main_loop          ; end of buffer, CMD not found
+    cmp  byte [si],   'C'
+    jne  find_next
+    cmp  byte [si+1], 'M'
+    jne  find_next
+    cmp  byte [si+2], 'D'
+    jne  find_next
+    cmp  byte [si+3], '='
+    jne  find_next
+    jmp  got_cmd
+find_next:
+    inc  si
+    jmp  find_cmd
+
+got_cmd:
+    add  si, 4              ; SI now points to value after "CMD="
+
+    ; -- Check CMD=NONE ? do nothing -------------------------
+    cmp  byte [si],   'N'
+    jne  chk_entry
+    cmp  byte [si+1], 'O'
+    jne  chk_entry
+    cmp  byte [si+2], 'N'
+    jne  chk_entry
+    cmp  byte [si+3], 'E'
+    jne  chk_entry
+    jmp  main_loop          ; CMD=NONE — just keep polling
+
+    ; -- Check CMD=ENTRY -------------------------------------
+chk_entry:
+    cmp  byte [si],   'E'
+    jne  chk_exit
+    cmp  byte [si+1], 'N'
+    jne  chk_exit
+    cmp  byte [si+2], 'T'
+    jne  chk_exit
+    cmp  byte [si+3], 'R'
+    jne  chk_exit
+    jmp  do_entry
+
+    ; -- Check CMD=EXIT --------------------------------------
+chk_exit:
+    cmp  byte [si],   'E'
+    jne  chk_quit
+    cmp  byte [si+1], 'X'
+    jne  chk_quit
+    cmp  byte [si+2], 'I'
+    jne  chk_quit
+    cmp  byte [si+3], 'T'
+    jne  chk_quit
+    jmp  do_exit
+
+    ; -- Check CMD=QUIT --------------------------------------
+chk_quit:
+    cmp  byte [si],   'Q'
+    jne  main_loop
+    cmp  byte [si+1], 'U'
+    jne  main_loop
+    cmp  byte [si+2], 'I'
+    jne  main_loop
+    cmp  byte [si+3], 'T'
+    jne  main_loop
+    jmp  do_quit
+
+
+; ------------------------------------------------------------
+;   CMD=ENTRY ? print "Vehicle entered! X slots available."
+; ------------------------------------------------------------
+do_entry:
+    call parse_avail        ; loads [avail_slots] from rbuf
+    mov  dx, msg_entered
+    call pstr
+    mov  al, [avail_slots]
+    call pnum
+    mov  dx, msg_slots_avail
+    call pstr
+    call clear_cmd          ; write CMD=NONE back to park.txt
+    jmp  main_loop
+
+
+; ------------------------------------------------------------
+;   CMD=EXIT ? print "Vehicle exited! X slots available."
+; ------------------------------------------------------------
+do_exit:
+    call parse_avail
+    mov  dx, msg_exited
+    call pstr
+    mov  al, [avail_slots]
+    call pnum
+    mov  dx, msg_slots_avail
+    call pstr
+    call clear_cmd
+    jmp  main_loop
+
+
+; ------------------------------------------------------------
+;   CMD=QUIT ? print goodbye and exit
+; ------------------------------------------------------------
+do_quit:
+    call parse_avail
+    mov  dx, msg_bye
+    call pstr
+    mov  al, [avail_slots]
+    call pnum
+    mov  dx, msg_slots_avail
+    call pstr
+    mov  ah, 4Ch
+    int  21h
+
+
+; ------------------------------------------------------------
+;   PROC: parse_avail
+;   Scans rbuf for "AVAILABLE=" and reads the number after it
+;   Result stored in [avail_slots]
+; ------------------------------------------------------------
+parse_avail:
+    pusha
+    mov  si, rbuf
+pa_find:
+    cmp  byte [si], 0
+    je   pa_done
+    cmp  byte [si],   'A'
+    jne  pa_next
+    cmp  byte [si+1], 'V'
+    jne  pa_next
+    cmp  byte [si+2], 'A'
+    jne  pa_next
+    cmp  byte [si+3], 'I'
+    jne  pa_next
+    cmp  byte [si+4], 'L'
+    jne  pa_next
+    cmp  byte [si+5], 'A'
+    jne  pa_next
+    cmp  byte [si+6], 'B'
+    jne  pa_next
+    cmp  byte [si+7], 'L'
+    jne  pa_next
+    cmp  byte [si+8], 'E'
+    jne  pa_next
+    cmp  byte [si+9], '='
+    jne  pa_next
+    jmp  pa_read
+pa_next:
+    inc  si
+    jmp  pa_find
+pa_read:
+    add  si, 10             ; skip "AVAILABLE="
+    mov  al, [si]
+    cmp  al, ' '            ; space = single digit, skip it
+    jne  pa_tens
+    inc  si
+    jmp  pa_units
+pa_tens:
+    sub  al, '0'
+    mov  bl, 10
+    mul  bl                 ; AL = tens * 10
+    mov  bh, al
+    inc  si
+    mov  al, [si]
+    sub  al, '0'
+    add  al, bh             ; AL = tens*10 + units
+    mov  [avail_slots], al
+    jmp  pa_done
+pa_units:
+    mov  al, [si]
+    sub  al, '0'
+    mov  [avail_slots], al
+pa_done:
+    popa
+    ret
+
+
+; ------------------------------------------------------------
+;   PROC: clear_cmd
+;   Rewrites park.txt keeping AVAILABLE & STATUS but sets
+;   CMD=NONE so ASM won't re-trigger the same message
+; ------------------------------------------------------------
+clear_cmd:
+    pusha
+
+    ; -- Fill AVAILABLE digits in wbuf -----------------------
+    mov  al, [avail_slots]
+    mov  ah, 0
+    mov  bl, 10
+    div  bl                 ; AL=tens AH=units
+    mov  bh, ah
+    cmp  al, 0
+    je   cc_single
+    add  al, '0'
+    mov  [wbuf+10], al
+    mov  al, bh
+    add  al, '0'
+    mov  [wbuf+11], al
+    jmp  cc_status
+cc_single:
+    mov  byte [wbuf+10], ' '
+    mov  al, bh
+    add  al, '0'
+    mov  [wbuf+11], al
+
+cc_status:
+    ; -- Fill STATUS -----------------------------------------
+    mov  al, [avail_slots]
+    cmp  al, 0
+    je   cc_full
+    mov  byte [wbuf+21], 'O'
+    mov  byte [wbuf+22], 'P'
+    mov  byte [wbuf+23], 'E'
+    mov  byte [wbuf+24], 'N'
+    jmp  cc_write
+cc_full:
+    mov  byte [wbuf+21], 'F'
+    mov  byte [wbuf+22], 'U'
+    mov  byte [wbuf+23], 'L'
+    mov  byte [wbuf+24], 'L'
+
+cc_write:
+    ; -- Create/overwrite park.txt ----------------------------
+    mov  ah, 3Ch
+    xor  cx, cx
+    mov  dx, fname_in
+    int  21h
+    jc   cc_end
+    mov  [file_handle], ax
+
+    mov  bx, [file_handle]
+    mov  ah, 40h
+    mov  cx, WBUF_LEN
+    mov  dx, wbuf
+    int  21h
+
+    mov  bx, [file_handle]
+    mov  ah, 3Eh
+    int  21h
+
+cc_end:
+    popa
+    ret
+
+
+; ------------------------------------------------------------
+;   PROC: pnum  — print AL as decimal (no leading zero)
+; ------------------------------------------------------------
+pnum:
+    push ax
+    push bx
+    push dx
+    mov  ah, 0
+    mov  bl, 10
+    div  bl
+    mov  bh, ah
+    cmp  al, 0
+    je   pn_skip
+    add  al, '0'
+    mov  dl, al
+    mov  ah, 02h
+    int  21h
+pn_skip:
+    mov  al, bh
+    add  al, '0'
+    mov  dl, al
+    mov  ah, 02h
+    int  21h
+    pop  dx
+    pop  bx
+    pop  ax
+    ret
+
+
+; ------------------------------------------------------------
+;   PROC: pstr  — print '$'-terminated string at DX
+; ------------------------------------------------------------
+pstr:
+    mov  ah, 09h
+    int  21h
+    ret
+
+
+; ------------------------------------------------------------
+;   DATA
+; ------------------------------------------------------------
+avail_slots  db  10
+file_handle  dw  0
+rbuf         db  64 dup(0)      ; read buffer for park.txt
+
+fname_in     db  'C:\park.txt', 0
+
+; wbuf layout (38 bytes):
+;   [0..13]  = 'AVAILABLE=  \r\n'   14 bytes
+;   [14..26] = 'STATUS=    \r\n'    13 bytes
+;   [27..37] = 'CMD=NONE\r\n'       11 bytes
+WBUF_LEN = 38
+wbuf         db  'AVAILABLE=  ', 0Dh, 0Ah    ; [0..13]
+             db  'STATUS=    ', 0Dh, 0Ah     ; [14..26]
+             db  'CMD=NONE', 0Dh, 0Ah        ; [27..37]
+
+msg_welcome  db  0Dh, 0Ah
+             db  '================================', 0Dh, 0Ah
+             db  '  AUTO CAR PARKING SYSTEM v4.0 ', 0Dh, 0Ah
+             db  '  Waiting for GUI commands...  ', 0Dh, 0Ah
+             db  '================================', 0Dh, 0Ah, '$'
+
+msg_entered      db  0Dh, 0Ah, ' >> Vehicle Entered Successfully! Only $'
+msg_exited       db  0Dh, 0Ah, ' >> Vehicle Exited Successfully! Now $'
+msg_slots_avail  db  ' slots available.', 0Dh, 0Ah, '$'
+msg_bye          db  0Dh, 0Ah, ' >> Program Exited. Available slots: $'
